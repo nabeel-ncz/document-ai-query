@@ -1,26 +1,44 @@
 import { Worker } from "bullmq";
 import { prismaClient, redisClient } from "@/config";
 import { generateEmbeddings } from "@/utils/http";
+import pdfParser from "pdf-parse";
 
-export const worker = new Worker('pdf-processing', async (job) => {
-    const { projectId, projectFile } = job.data;
-    console.log(projectId, projectFile);
+const splitIntoSentences = (text: string) => {
+    return text
+        .replace(/([.!?])\s*(?=[A-Z])/g, "$1|")
+        .split("|")
+        .map(sentence => sentence.trim())
+        .filter(sentence => sentence.length > 0);
+};
+
+
+export const worker = new Worker('process-pdf', async (job) => {
+    const { projectId, fileBuffer } = job.data;
     try {
-        const embeddings = await generateEmbeddings();
-        const embCreated = await prismaClient.embeddings.create({
+        const sourceData = await pdfParser(fileBuffer);
+        const sourceSentences = splitIntoSentences(sourceData.text);
+
+        const embeddings = await generateEmbeddings({
+            source_sentence: sourceData.text,
+            sentences: sourceSentences
+        });
+
+        console.log(embeddings);
+
+        await prismaClient.embeddings.create({
             data: {
                 project_id: Number(projectId),
                 vector: embeddings
             }
         });
-        const projectUpdated = await prismaClient.projects.update({
+
+        await prismaClient.projects.update({
             where: { id: Number(projectId) },
             data: {
                 status: 'created'
             }
         });
-        console.log('embedded created : ', embCreated);
-        console.log('project updated : ', projectUpdated);
+
     } catch (error) {
         console.log('error', error);
     }
